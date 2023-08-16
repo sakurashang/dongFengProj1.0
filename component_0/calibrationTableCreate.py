@@ -10,6 +10,8 @@ import can
 import time
 import numpy as np
 import threading
+import component_0.classOfIMU_CGI610 as classOfIMU_CGI610
+from component_0 import classOfTractorInfoRead, classOfDataRecord, calibrationDataRecord
 
 
 class CANMsgTrans(object):
@@ -126,8 +128,12 @@ class VCUCmd(object):
         本类进行拖拉机整车（横纵向运动、提升器、PTO、液压输出）控制指令的封装，按特定功能来设计函数。
     """
     # 类成员变量
+    #可能被用到的参数
+    #1、车速（0-60） 2、前进（1前进，0空档，-1后退）4、导航模式（0、手动模式 1、扭矩2、自动模式）
     __NAVI_cmd_list = [0.0, 0, 0, 2, 0, 0]
+    #1、档位选择（3抵挡、11高档）
     __NAVI2_cmd_list = [3, 0, 250, 250, 250]
+    #5、前轮转角 7、请求刹车(0不刹车、1、刹车 ，扭矩模式时起作用） 8控制扭矩（扭矩模式时起作用）
     __NAVI3_cmd_list = [0, 0, 0, 0, 0, 0, 0, 0]
 
     # 按实现不同功能设计类方法
@@ -137,7 +143,8 @@ class VCUCmd(object):
         """
         self.tractor = tractor
 
-    def send_motion_ctrl_msg(self, Drive_Mode_Req, ShiftLevel_Req, Steering_Wheel_Angle, Target_Speed, Brk_En):
+    # 用扭矩进行控制
+    def send_motion_ctrl_msg(self, Drive_Mode_Req, ShiftLevel_Req, Steering_Wheel_Angle, Torque, Brk_En):
         """
             发送车辆横纵向控制指令。后期把参数换成英文。
         :param Drive_Mode_Req:0:手动模式、1：扭矩受导航请求控制、2：自动模式
@@ -162,7 +169,7 @@ class VCUCmd(object):
             return "程序刹车制动"
 
         # 修改变量序列
-        self.__NAVI_cmd_list[0] = Target_Speed  # 修改车速
+        self.__NAVI_cmd_list3[7] = Torque  # 修改扭矩
 
         if ShiftLevel_Req == "前进高档":  # 测试下是否高效
             self.__NAVI_cmd_list[1] = 1  # 修改档位(前进1、空挡0、后退1)
@@ -197,50 +204,6 @@ class VCUCmd(object):
         self.tractor.send_msg("NAVI3", self.__NAVI3_cmd_list)
         return "程序控制指令发送成功"
 
-    def send_hoist_msg(self, hoist_cmd="rising", hoist_ploughing_depth_set=1000, hoist_height_limit_set=220,
-                       hoist_drop_speed_set=50, hoist_model_set=250):  # debug 修改最高高度250 到220
-        """
-            控制提升器的高度、升降等。参数列表：提升器指令、耕地深度设定旋钮、限高旋钮、下降速度设定、模式设定。 (反馈值：提升器位置（高度）、提升器合力)
-        :param hoist_cmd:"rising"、“falling”、“no_action”
-        :param hoist_ploughing_depth_set:
-        :param hoist_height_limit_set:
-        :param hoist_drop_speed_set:
-        :param hoist_model_set:
-        :return:
-        """
-        # 提升器指令
-        if hoist_cmd == "rising":
-            self.__NAVI_cmd_list[2] = 0xf0
-        elif hoist_cmd == "falling":
-            self.__NAVI_cmd_list[2] = 0x0f
-        else:
-            self.__NAVI_cmd_list[2] = 0  # 无动作
-
-        self.__NAVI2_cmd_list[1] = hoist_ploughing_depth_set
-        self.__NAVI2_cmd_list[2] = hoist_height_limit_set
-        self.__NAVI2_cmd_list[3] = hoist_drop_speed_set
-        self.__NAVI2_cmd_list[4] = hoist_model_set
-
-        # 发送命令
-        self.tractor.send_msg("NAVI", self.__NAVI_cmd_list)
-        self.tractor.send_msg("NAVI2", self.__NAVI2_cmd_list)
-        # self.tractor.send_msg("NAVI3", self.__NAVI3_cmd_list)
-
-    def steering_wheel_fault_removal(self):
-        """发送方向盘故障清除指令，这里应该有一个持续时间的问题，如果测试不行则多发几次"""
-        # 改好发送再改过来
-        self.__NAVI3_cmd_list[5] = 1
-        self.tractor.send_msg("NAVI3", self.__NAVI3_cmd_list)
-        self.__NAVI3_cmd_list[5] = 0
-
-    def send_pto_msg(self, pto_connected=0):
-        """控制PTO"""
-        self.__NAVI_cmd_list[5] = pto_connected  # 修改PTO指令
-        self.tractor.send_msg("NAVI", self.__NAVI_cmd_list)
-
-    def send_hydraulic_msg(self):
-        """控制液压输出"""
-
 
 class SafetyGuarantee(object):
     """提供安全保障功能"""
@@ -271,28 +234,34 @@ if __name__ == "__main__":
 
     # 20210705 更新:测试横向跟踪性能
     tractor = Tractor("send")
+    imu = classOfIMU_CGI610.Imu()
+    time.sleep(3)
+    vcu_cmd = VCUCmd(tractor)
+    path = r'calibrationData/'
+    record = calibrationDataRecord.DataRecord(path + "标定行驶时数据" +
+                                          time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time())) +
+                                          ".csv")
+    #获取行驶中的数据
+    inte_navi_info = imu.stateOfCar()
+    tractor_info_read = classOfTractorInfoRead.TractorInfoRead()
+    tractor_info_dict = tractor_info_read.vehicle_state_info_return()
+    msg = [time.time(), inte_navi_info, tractor_info_read]
 
-    #time.sleep(3)
-    tractor.send_msg("NAVI", NAVI_cmd_list)
-    NAVI3_cmd_list[4] = -40
-    tractor.send_msg("NAVI3", NAVI3_cmd_list)
+    # 标定表 标定正向扭矩
+    Torque = 1
+    vcu_cmd.send_motion_ctrl_msg(1, "前进高档", 0, Torque, 0)
+    # 标定表所需要的数据，当前的扭矩数值，速度、加速度、时间、经纬度、高程、Utm、
+    record.data_record(msg)
+
+    #标定表 标定制动的扭矩
+    Torque = 100 #用最大值
+    vcu_cmd.send_motion_ctrl_msg(1, "前进高档", 0, Torque, 0)
+    v_navi = inte_navi_info[19]     # m/s
+    v_navi = v_navi * 3.6
+    v_trac = tractor_info_dict["车速"]  # 单位km/h 应该是
+    if v_trac > 30 :
+        Torque = 1
+        vcu_cmd.send_motion_ctrl_msg(1, "前进高档", 0, Torque, 0)
+        record.data_record(msg)
 
 
-
-    while True:
-        # time.sleep(1)
-        for i in range(10):
-            pass
-            # NAVI_cmd_list[0] = i
-            # NAVI2_cmd_list[0] = i
-            # NAVI3_cmd_list[0] = i
-            # VC6_cmd_list[1] = i
-            #
-            # time.sleep(0.1)
-            # tractor.send_msg("NAVI", NAVI_cmd_list)
-            # tractor.send_msg("NAVI2", NAVI2_cmd_list)
-            # tractor.send_msg("NAVI3", NAVI3_cmd_list)
-            # tractor.send_msg("VC6", VC6_cmd_list)
-
-    # 最后想实现的功能，一个函数和参数，调用相关的指令。
-    # tractor.send_msg("NAVI",[])
